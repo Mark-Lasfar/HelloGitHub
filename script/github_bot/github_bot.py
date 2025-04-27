@@ -3,7 +3,7 @@
 #
 #   Author  :   XueWeiHan
 #   E-mail  :   595666367@qq.com
-#   Date    :   16/8/30 下午10:43
+#   Date    :   2025-04-27
 #   Desc    :   Github Bot
 import os
 import logging
@@ -12,117 +12,99 @@ import datetime
 from operator import itemgetter
 from email.mime.text import MIMEText
 from email.header import Header
-
 import requests
 
+# Logging setup
 logging.basicConfig(
     level=logging.WARNING,
     filename=os.path.join(os.path.dirname(__file__), 'bot_log.txt'),
     filemode='a',
     format='%(name)s %(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s'
 )
-logger = logging.getLogger('Bot')  # 设置log名称
-# github帐号
+logger = logging.getLogger('Bot')  # Log name
+
+# GitHub account details
 ACCOUNT = {
-    'username': '',
-    'password': ''
+    'username': os.getenv('GITHUB_USERNAME', ''),
+    'password': os.getenv('GITHUB_PASSWORD', '')
 }
 
+# API to fetch events
 API = {
     'events': 'https://api.github.com/users/{username}/received_events'.format(username=ACCOUNT['username'])
 }
 
-# 发送邮件，邮箱的信息
+# Email sending details
 MAIL = {
-    'mail': '',  # 发送邮件的邮箱地址
-    'username': '',
-    'password': '',
+    'mail': os.getenv('MAIL_SENDER', ''),  # Sender email
+    'username': os.getenv('MAIL_USERNAME', ''),
+    'password': os.getenv('MAIL_PASSWORD', ''),
     'host': 'smtp.qq.com',
     'port': 465
 }
 
-# 接收邮件的邮箱地址
-RECEIVERS = []
+# Receivers
+RECEIVERS = os.getenv('MAIL_RECEIVERS', '').split(',')
 
-# 几天前
+# Days ago
 DAY = 1
 
-# 项目stars临界值
+# Stars threshold
 STARS = 100
 
-# qq邮件服务文档：http://service.mail.qq.com/cgi-bin/help?id=28
-
-
+# HTML content format
 CONTENT_FORMAT = """
     <table border="2" align="center">
       <tr>
-        <th>头像</th>
-        <th>用户名</th>
-        <th>项目名</th>
-        <th>starred 日期</th>
-        <th>项目 star 数量</th>
+        <th>Avatar</th>
+        <th>Username</th>
+        <th>Repository</th>
+        <th>Starred Date</th>
+        <th>Stars</th>
       </tr>
       {project_info_string}
     </table>
 """
 
-
 def get_data(page=1):
     """
-    从目标源获取数据
-    https://developer.github.com/v3/activity/events/
-    GitHub 规定：默认每页 30 条，最多 300 条目
+    Fetch data from the API
     """
-
     args = '?page={page}'.format(page=page)
-
-    response = requests.get(API['events']+args,
-                            auth=(ACCOUNT['username'], ACCOUNT['password']))
+    response = requests.get(API['events'] + args, auth=(ACCOUNT['username'], ACCOUNT['password']))
     status_code = response.status_code
     if status_code == 200:
-        resp_json = response.json()
-        return resp_json
+        return response.json()
     else:
-        logging.error('请求 event api 失败：', status_code)
+        logger.error(f'Failed to request events API: {status_code}')
         return []
-
 
 def get_all_data():
     """
-    获取全部 300 条的数据
-    https://developer.github.com/v3/activity/events/
-    GitHub 规定：默认每页 30 条，最多 300 条目
+    Fetch all data (up to 300 events)
     """
-    all_data_list = []
+    all_data = []
     for i in range(10):
-        response_json = get_data(i+1)
-        if response_json:
-            all_data_list.extend(response_json)
-    return all_data_list
-
+        data = get_data(i + 1)
+        if data:
+            all_data.extend(data)
+    return all_data
 
 def check_condition(data):
     """
-    过滤条件
+    Check if the data meets the condition
     """
-    create_time = datetime.datetime.strptime(
-        data['created_at'], "%Y-%m-%dT%H:%M:%SZ") + datetime.timedelta(hours=8)
-    date_condition = create_time >= (datetime.datetime.now()
-                                     - datetime.timedelta(days=DAY))
-    if (data['type'] == 'WatchEvent') and date_condition:
-        # 不统计自己项目的star事件
-        if data['payload']['action'] == 'started' and \
-           ACCOUNT['username'] not in data['repo']['name']:
+    create_time = datetime.datetime.strptime(data['created_at'], "%Y-%m-%dT%H:%M:%SZ") + datetime.timedelta(hours=8)
+    date_condition = create_time >= (datetime.datetime.now() - datetime.timedelta(days=DAY))
+    if data['type'] == 'WatchEvent' and date_condition:
+        if data['payload']['action'] == 'started' and ACCOUNT['username'] not in data['repo']['name']:
             data['date_time'] = create_time.strftime("%Y-%m-%d %H:%M:%S")
             return True
-    else:
-        return False
-
+    return False
 
 def analyze(json_data):
     """
-    分析获取的数据
-    :return 符合过滤条件的数据
+    Analyze the data
     """
     result_data = []
     for fi_data in json_data:
@@ -130,83 +112,77 @@ def analyze(json_data):
             result_data.append(fi_data)
     return result_data
 
-
 def get_stars(data):
     """
-    获取stars数量，同时过滤掉stars数量少的项目
+    Get the star count for repositories and filter out projects with fewer stars than the threshold
     """
     project_info_list = []
     for fi_data in data:
-        project_info = dict()
-        project_info['user'] = fi_data['actor']['login']
-        project_info['user_url'] = 'https://github.com/' + project_info['user']
-        project_info['avatar_url'] = fi_data['actor']['avatar_url']
-        project_info['repo_name'] = fi_data['repo']['name']
-        project_info['repo_url'] = 'https://github.com/' + project_info['repo_name']
-        project_info['date_time'] = fi_data['date_time']
+        project_info = {
+            'user': fi_data['actor']['login'],
+            'user_url': f'https://github.com/{fi_data["actor"]["login"]}',
+            'avatar_url': fi_data['actor']['avatar_url'],
+            'repo_name': fi_data['repo']['name'],
+            'repo_url': f'https://github.com/{fi_data["repo"]["name"]}',
+            'date_time': fi_data['date_time']
+        }
         try:
             repo_stars = requests.get(fi_data['repo']['url'], timeout=2).json()
-            if repo_stars:
-                project_info['repo_stars'] = int(repo_stars['stargazers_count'])
-            else:
-                project_info['repo_stars'] = -1
+            project_info['repo_stars'] = repo_stars.get('stargazers_count', -1)
         except Exception as e:
             project_info['repo_stars'] = -1
-            logger.warning(u'获取：{} 项目星数失败——{}'.format(
-                project_info['repo_name'], e))
-        finally:
-            if project_info['repo_stars'] >= STARS or project_info['repo_stars'] == -1:
-                # 过滤掉star数量低于临界值的项目
-                project_info_list.append(project_info)
+            logger.warning(f"Failed to fetch stars for {project_info['repo_name']} - {e}")
+        
+        if project_info['repo_stars'] >= STARS or project_info['repo_stars'] == -1:
+            project_info_list.append(project_info)
+    
+    # Sort projects by star count
     project_info_list = sorted(project_info_list, key=itemgetter('repo_stars'), reverse=True)
     return project_info_list
 
-
 def make_content():
     """
-    生成发布邮件的内容
+    Prepare the content for the email
     """
     json_data = get_all_data()
     data = analyze(json_data)
     content = []
     project_info_list = get_stars(data)
     for project_info in project_info_list:
-        project_info_string = """<tr>
-                                <td><img src={avatar_url} width=32px></img></td>
-                                <td><a href={user_url}>{user}</a></td>
-                                <td><a href={repo_url}>{repo_name}</a></td>
-                                <td>{date_time}</td>
-                                <td>{repo_stars}</td>
-                              </tr>
-                           """.format(**project_info)
+        project_info_string = f"""
+            <tr>
+                <td><img src={project_info['avatar_url']} width=32px></td>
+                <td><a href={project_info['user_url']}>{project_info['user']}</a></td>
+                <td><a href={project_info['repo_url']}>{project_info['repo_name']}</a></td>
+                <td>{project_info['date_time']}</td>
+                <td>{project_info['repo_stars']}</td>
+            </tr>
+        """
         content.append(project_info_string)
     return content
 
-
 def send_email(receivers, email_content):
     """
-    发送邮件
+    Send the email
     """
-    sender = MAIL['mail']  # 发送邮件的邮箱
-    receivers = receivers   # 接收邮件的邮箱，可设置多个
+    if not receivers:
+        logger.warning("No email receivers specified. Email will not be sent.")
+        return
 
-    # 三个参数：第一个为文本内容，第二个 html 设置文本格式，第三个 utf-8 设置编码
-    message = MIMEText(
-        CONTENT_FORMAT.format(project_info_string=''.join(email_content)),
-        'html', 'utf-8'
-    )
-    message['From'] = Header(u'GitHub 机器人', 'utf-8')
-    message['To'] = Header(u'削微寒', 'utf-8')
-
-    subject = u'今日 GitHub 热点'  # 设置邮件主题
+    sender = MAIL['mail']
+    message = MIMEText(CONTENT_FORMAT.format(project_info_string=''.join(email_content)), 'html', 'utf-8')
+    message['From'] = Header('GitHub Bot', 'utf-8')
+    message['To'] = Header('GitHub User', 'utf-8')
+    subject = 'GitHub Starred Projects Today'
     message['Subject'] = Header(subject, 'utf-8')
+    
     try:
-        smtp_obj = smtplib.SMTP_SSL()  # qq邮箱要求是https连接，所以需要用SMTP_SSL
-        smtp_obj.connect(MAIL['host'], MAIL['port'])    # 设置SMTP地址和端口号
-        smtp_obj.login(MAIL['username'], MAIL['password'])
-        smtp_obj.sendmail(sender, receivers, message.as_string())
+        with smtplib.SMTP_SSL(MAIL['host'], MAIL['port']) as smtp:
+            smtp.login(MAIL['username'], MAIL['password'])
+            smtp.sendmail(sender, receivers, message.as_string())
+        logger.info("Email sent successfully.")
     except smtplib.SMTPException as e:
-        logger.error(u"无法发送邮件: {}".format(e))
+        logger.error(f"Failed to send email: {e}")
 
 if __name__ == '__main__':
     content = make_content()
