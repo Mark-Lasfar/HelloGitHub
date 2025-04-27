@@ -1,29 +1,29 @@
-#!/usr/bin/env python
-# -*- coding:utf-8 -*-
-#
-#   Author  :   XueWeiHan
-#   E-mail  :   595666367@qq.com
-#   Date    :   16/10/21 下午1:41
-#   Desc    :   HelloGitHub项目——生成月刊脚本
-"""
-该脚本主要用于：生成月刊
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-《HelloGitHub》月刊每期内容都遵循统一格式，如果需要对通用部分的内容进行修改，需要手动修改每一
-期的内容，这是不优雅的。
-
-所以，我打算写个脚本，用于生成月刊，这样如果修改了通用内容部分，就只需要重新生成月刊，而不需要
-手动修改已发布的所有期的内容。
 """
-from __future__ import print_function
+Author  : XueWeiHan
+E-mail  : 595666367@qq.com
+Date    : 2016-10-21
+Updated : 2025-04-27
+Desc    : HelloGitHub项目——生成月刊脚本
+
+该脚本用于根据模板和内容文件自动生成《HelloGitHub》月刊，
+统一格式，便于后期维护和批量操作。
+"""
+
 import sys
 import os
 
+# 占位符，用于替换模板中的内容
 CONTENT_FLAG = '{{ hello_github_content }}'
 NUM_FLAG = '{{ hello_github_num }}'
 
 
 class InputError(Exception):
+    """自定义异常：输入参数错误"""
     def __init__(self, message):
+        super().__init__(message)
         self.message = message
 
     def __str__(self):
@@ -31,70 +31,85 @@ class InputError(Exception):
 
 
 def check_path(path):
-    """
-    检查路径是否存在
-    """
+    """检查文件或目录是否存在"""
     if not os.path.exists(path):
-        print('not exist: {path}'.format(path=path))
+        print(f'错误：路径不存在 -> {path}')
         return False
-    else:
-        return True
+    return True
 
 
-def read_file(input_path):
-    with open(input_path, 'r') as fb:
-        return fb.read()
+def read_file(file_path):
+    """读取文件内容"""
+    with open(file_path, 'r', encoding='utf-8') as f:
+        return f.read()
 
 
-def write_file(output_path, output_data):
-    with open(output_path, 'w') as fb:
-        fb.write(output_data)
+def write_file(file_path, data):
+    """将内容写入文件"""
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(data)
 
 
 def make_content(num):
-    template_path = os.path.join(os.path.abspath(os.curdir), 'template.md')
-    output_path = os.path.join(os.path.abspath(os.curdir), num)
-    content_path = os.path.join(output_path, 'content'+num+'.md')
-    if not (check_path(content_path) and check_path(template_path)):
-        # 如果 content 和 template 文件不存在
-        return None
-    temple_data = read_file(template_path).replace(NUM_FLAG, num)
+    """
+    根据指定期号，生成对应的月刊文件
+    :param num: 期号，例如 '01', '02', '10' 等
+    """
+    cur_dir = os.path.abspath(os.curdir)
+    template_path = os.path.join(cur_dir, 'template.md')
+    output_dir = os.path.join(cur_dir, num)
+    content_path = os.path.join(output_dir, f'content{num}.md')
 
+    if not (check_path(template_path) and check_path(content_path)):
+        print(f"跳过：期号 {num} 的模板或内容文件缺失")
+        return
+
+    template_data = read_file(template_path).replace(NUM_FLAG, num)
     content_data = read_file(content_path)
+    output_data = template_data.replace(CONTENT_FLAG, content_data)
 
-    output_data = temple_data.replace(CONTENT_FLAG, content_data)
+    output_file = os.path.join(output_dir, f'HelloGitHub{num}.md')
+    write_file(output_file, output_data)
 
-    write_file(os.path.join(output_path, 'HelloGitHub{num}.md'.format(num=num)), output_data)
-    print('Make 《GitHub月刊{num}》 successful！'.format(num=num))
+    print(f'成功生成：《HelloGitHub》第 {num} 期')
 
 
 def make_all_content():
-    dir_list = os.listdir(os.path.abspath(os.curdir))
-    for fi_dir in dir_list:
-        # 忽略‘script’的目录
-        if os.path.isdir(fi_dir) and 'script' not in fi_dir:
-            make_content(fi_dir)
+    """
+    批量生成当前目录下所有有效期号的月刊
+    """
+    cur_dir = os.path.abspath(os.curdir)
+    for item in os.listdir(cur_dir):
+        item_path = os.path.join(cur_dir, item)
+        if os.path.isdir(item_path) and item.isdigit():
+            make_content(item)
 
 
 def main():
-    """
-    入口方法
-    """
-    input_list = sys.argv  # 获取输入的参数
+    """主入口函数"""
+    try:
+        args = sys.argv
+        if len(args) != 2:
+            raise InputError('输入错误：需要一个参数（期号或 "all"）')
 
-    if len(input_list) != 2:
-        raise InputError('Input error: Need a param')
-    else:
-        try:
-            input_arg = input_list[1]
-        except Exception:
-            raise InputError('Input error: Must be number')
-    if len(input_arg) == 1:
-        make_content('0' + input_arg)
-    elif input_arg == 'all':
-        make_all_content()
-    else:
-        make_content(input_arg)
+        input_arg = args[1].lower()
+
+        if input_arg == 'all':
+            make_all_content()
+        elif input_arg.isdigit():
+            # 如果是单数字补0，比如 '1' -> '01'
+            if len(input_arg) == 1:
+                input_arg = f'0{input_arg}'
+            make_content(input_arg)
+        else:
+            raise InputError('输入错误：参数必须是数字或 "all"')
+    except InputError as e:
+        print(e)
+        sys.exit(1)
+    except Exception as e:
+        print(f"程序异常退出：{e}")
+        sys.exit(1)
+
 
 if __name__ == '__main__':
     main()
